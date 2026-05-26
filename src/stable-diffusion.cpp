@@ -144,6 +144,14 @@ public:
     std::string taesd_path;
     sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0, 0};
     bool offload_params_to_cpu           = false;
+    // pmid_loaded is the immutable capability flag (model was loaded with a
+    // PhotoMaker file). use_pmid is the PER-REQUEST gate: it is reset from
+    // pmid_loaded at the start of every get_pmid_conditon call and may be
+    // turned off for the duration of a single request when that request
+    // supplies no / invalid id images. Keeping these separate is what lets a
+    // resident server serve a plain request and then a face-anchored request
+    // without the first permanently disabling PhotoMaker.
+    bool pmid_loaded                     = false;
     bool use_pmid                        = false;
 
     bool is_using_v_parameterization     = false;
@@ -695,7 +703,8 @@ public:
                 if (!model_loader.init_from_file_and_convert_name(sd_ctx_params->photo_maker_path, "pmid.")) {
                     LOG_WARN("loading stacked ID embedding from '%s' failed", sd_ctx_params->photo_maker_path);
                 } else {
-                    use_pmid = true;
+                    use_pmid    = true;
+                    pmid_loaded = true;
                 }
             }
             if (use_pmid) {
@@ -1225,6 +1234,10 @@ public:
     SDCondition get_pmid_conditon(sd_pm_params_t pm_params,
                                   ConditionerParams& condition_params) {
         SDCondition id_cond;
+        // Start each request from the loaded capability. The per-request "turn
+        // off PhotoMaker" branches below scope to THIS request only and must
+        // not leak into the next one (resident server serves many requests).
+        use_pmid = pmid_loaded;
         if (use_pmid) {
             if (!pmid_lora->applied) {
                 int64_t t0 = ggml_time_ms();
@@ -1679,13 +1692,19 @@ public:
                 return output_opt;
             };
 
-            if (start_merge_step == -1 || step <= start_merge_step) {
+            // Use the PhotoMaker-merged conditioning only past the merge step
+            // AND only when id_cond was actually built. If PhotoMaker was
+            // disabled at runtime (bad/empty id images) after start_merge_step
+            // was computed, fall back to the plain prompt conditioning instead
+            // of aborting — a resident server must never crash on a single
+            // request.
+            const bool use_id_cond = start_merge_step != -1 && step > start_merge_step && !id_cond.empty();
+            if (!use_id_cond) {
                 cond_out = run_condition(cond);
                 if (cond_out.empty()) {
                     return {};
                 }
             } else {
-                GGML_ASSERT(!id_cond.empty());
                 cond_out = run_condition(id_cond,
                                          cond.c_concat.empty() ? nullptr : &cond.c_concat);
                 if (cond_out.empty()) {
@@ -2794,7 +2813,16 @@ struct SamplePlan {
             LOG_INFO("sampling(high noise) using %s method", sampling_methods_str[high_noise_sample_method]);
         }
 
-        if (sd_ctx->sd->use_pmid) {
+        // Only schedule the PhotoMaker merge step when this request actually
+        // supplies id (face) images. A resident server loaded with
+        // --photo-maker must still serve plain txt2img requests (no face ref);
+        // without this guard start_merge_step would be >= 0 while id_cond stays
+        // empty, tripping GGML_ASSERT(!id_cond.empty()) at sample time.
+        // Read the immutable capability (pmid_loaded), NOT the per-request
+        // use_pmid gate, which may still hold stale state from a previous
+        // request at this point (it is reset inside get_pmid_conditon, which
+        // runs after this).
+        if (sd_ctx->sd->pmid_loaded && request->pm_params.id_images_count > 0) {
             start_merge_step = int(sd_ctx->sd->pmid_model->style_strength / 100.f * total_steps);
             LOG_INFO("PHOTOMAKER: start_merge_step: %d", start_merge_step);
         }

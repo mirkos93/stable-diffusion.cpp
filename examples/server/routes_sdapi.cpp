@@ -246,6 +246,36 @@ static bool build_sdapi_img_gen_request(const json& j,
         }
     }
 
+    // PhotoMaker (face-anchor / avatar consistency). The ctx must be loaded
+    // with --photo-maker for these to take effect; if so, a base64 face
+    // reference (or several) plus the "<class> img" trigger word in the prompt
+    // drives the consistent-face path. id images keep native size (channels=3,
+    // expected w/h = 0), mirroring the CLI's --pm-id-images-dir behaviour.
+    if (j.contains("pm_id_images") && j["pm_id_images"].is_array()) {
+        request.gen_params.pm_id_images.clear();
+        for (const auto& pm_image : j["pm_id_images"]) {
+            if (!pm_image.is_string()) {
+                continue;
+            }
+            SDImageOwner image_owner;
+            if (decode_base64_image(pm_image.get<std::string>(), 3, 0, 0, image_owner)) {
+                request.gen_params.pm_id_images.push_back(std::move(image_owner));
+            } else {
+                error_message = "invalid pm_id_images entry";
+                return false;
+            }
+        }
+    }
+    if (!request.gen_params.pm_id_images.empty()) {
+        LOG_DEBUG("sdapi: %zu PhotoMaker id image(s) supplied", request.gen_params.pm_id_images.size());
+    }
+    if (j.contains("pm_id_embed_path") && j["pm_id_embed_path"].is_string()) {
+        request.gen_params.pm_id_embed_path = j["pm_id_embed_path"].get<std::string>();
+    }
+    if (j.contains("pm_style_strength") && j["pm_style_strength"].is_number()) {
+        request.gen_params.pm_style_strength = j["pm_style_strength"].get<float>();
+    }
+
     // Intentionally disable prompt-embedded LoRA tag parsing for server APIs.
     if (!request.gen_params.resolve_and_validate(IMG_GEN, "", runtime.ctx_params->hires_upscalers_dir, true)) {
         error_message = "invalid params";

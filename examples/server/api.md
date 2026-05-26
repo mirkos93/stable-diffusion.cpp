@@ -225,10 +225,20 @@ Currently supported request fields:
 | `hr_resize_y` | `integer` | Highres target height, `0` to use scale |
 | `hr_steps` | `integer` | Highres second-pass sample steps, `0` to reuse `steps` |
 | `denoising_strength` | `number` | Highres denoising strength for `txt2img` |
+| `pm_id_images` | `array<string>` | PhotoMaker face-reference images (Base64 or data URL). Requires the server to be started with `--photo-maker <model>`; the prompt must contain the `<class> img` trigger token (e.g. `a man img`). Each reference is kept at native resolution. |
+| `pm_id_embed_path` | `string` | PhotoMaker v2 id-embed file path (server-local). Optional; PhotoMaker v1 does not use it. |
+| `pm_style_strength` | `number` | PhotoMaker style/identity strength, percent (default `20`). Controls the merge step: higher = more stylization, lower = stronger identity. |
 
 Native extension fields:
 
 - any `sdcpp API` fields embedded through `sd_cpp_extra_args` inside `prompt`
+- `pm_id_images` / `pm_id_embed_path` / `pm_style_strength` are also accepted inside `sd_cpp_extra_args` and on the native `/sdcpp/v1/img_gen` route (`from_json_str`).
+
+PhotoMaker notes:
+
+- The server must be launched with `--photo-maker <photomaker.safetensors>` for these fields to take effect; the model is loaded once at startup (resident / warm) and reused across requests.
+- A server started with `--photo-maker` still serves plain `txt2img` requests (no `pm_id_images`): the PhotoMaker merge step is only scheduled when the request actually supplies id images.
+- PhotoMaker v1 requires an SDXL base model and the `<class> img` trigger word in the prompt (e.g. `a woman img ...`). Without the trigger token the conditioner aborts.
 
 Response fields:
 

@@ -1721,6 +1721,18 @@ bool SDGenerationParams::from_json_str(
         return false;
     }
 
+    // PhotoMaker (face-anchor / avatar consistency) per-request inputs.
+    // The id images must keep their native size (PhotoMaker resizes/crops
+    // internally), so pass expected_width/expected_height = 0 rather than the
+    // generation width/height. Mirrors the CLI's --pm-id-images-dir load
+    // (load_images_from_dir(..., 0, 0)).
+    load_if_exists("pm_id_embed_path", pm_id_embed_path);
+    load_if_exists("pm_style_strength", pm_style_strength);
+    if (!parse_image_array_json_field(j, "pm_id_images", 3, 0, 0, pm_id_images)) {
+        LOG_ERROR("invalid pm_id_images");
+        return false;
+    }
+
     return true;
 }
 
